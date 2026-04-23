@@ -55,7 +55,7 @@ class VinylScannerApp(QMainWindow):
         self.resize(1200, 800)
 
         # --- CONFIGURATION ---
-        self.token_discogs = "rpXDJtEZZKcjWUDnbTKGgLfOHpLnqAQLmlrQamPx"  # <--- Insérez votre token ici
+        self.token_discogs = "Token"  # <--- Insérez votre token ici
         self.db_name = "bibliotheque_vinyles.db"
         self.current_vinyl_data = None
         self.bubble = None
