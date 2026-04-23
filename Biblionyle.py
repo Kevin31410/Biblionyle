@@ -7,6 +7,7 @@ import sqlite3
 import base64
 import re
 import csv
+import time
 from PIL import Image
 from PyQt6.QtGui import QImage, QPixmap, QFont, QColor, QCursor, QIcon, QTextDocument, QPdfWriter, QPageSize
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
@@ -57,7 +58,7 @@ class VinylScannerApp(QMainWindow):
         self.resize(1200, 800)
 
         # --- CONFIGURATION ---
-        self.token_discogs = "Token"  # <--- Insérez votre token ici
+        self.token_discogs = "rpXDJtEZZKcjWUDnbTKGgLfOHpLnqAQLmlrQamPx"  # <--- Insérez votre token ici
         self.db_name = "bibliotheque_vinyles.db"
         self.current_vinyl_data = None
         self.bubble = None
@@ -157,6 +158,27 @@ class VinylScannerApp(QMainWindow):
         # --- COLONNE DROITE (RÉSULTATS) ---
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
+
+        # --- RECHERCHE MANUELLE ET CRÉATION (MODIFIÉ) ---
+        manual_layout = QHBoxLayout()
+        self.input_manual = QLineEdit()
+        self.input_manual.setPlaceholderText("Artiste - Titre...")
+        self.btn_manual = QPushButton("🔍 Chercher")
+        self.btn_manual.setStyleSheet("background-color: #3498db; padding: 5px;")
+        self.btn_manual.clicked.connect(self.manual_search)
+
+        manual_layout.addWidget(self.input_manual)
+        manual_layout.addWidget(self.btn_manual)
+        right_layout.addLayout(manual_layout)
+
+        # 🟢 NOUVEAU : Bouton pour créer de A à Z
+        self.btn_create_manual = QPushButton("✍️ Créer un vinyle (Hors Discogs)")
+        self.btn_create_manual.setStyleSheet("background-color: #8e44ad; padding: 8px; font-weight: bold;")
+        self.btn_create_manual.clicked.connect(self.open_create_window)
+        right_layout.addWidget(self.btn_create_manual)
+
+        right_layout.addSpacing(10)
+        # ------------------------------------------------
 
         self.lbl_cover = QLabel("La pochette s'affichera ici")
         self.lbl_cover.setFixedSize(300, 300)
@@ -464,6 +486,107 @@ class VinylScannerApp(QMainWindow):
 
         dlg.exec()
 
+    # ==========================================
+    # CRÉATION MANUELLE D'UN VINYLE
+    # ==========================================
+    def open_create_window(self):
+        """Ouvre un formulaire vierge pour un vinyle introuvable sur Discogs."""
+        self.hide_bubble()
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Créer un Vinyle (Hors Discogs)")
+        dlg.resize(450, 750)
+        layout = QVBoxLayout(dlg)
+
+        dlg.new_cover_data = ""  # Par défaut, pas d'image
+
+        # Aperçu Image
+        lbl_preview = QLabel("Aucune image")
+        lbl_preview.setFixedSize(150, 150)
+        lbl_preview.setStyleSheet("background-color: #34495e; border-radius: 5px;")
+        lbl_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl_preview, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        def update_preview(url_data):
+            pixmap = self.get_qpixmap_from_bytes(self.get_image_bytes(url_data), 150, 150)
+            if pixmap:
+                lbl_preview.setPixmap(pixmap)
+            else:
+                lbl_preview.setText("Aucune image")
+
+        # Formulaire vierge
+        entries = {}
+        fields = ["Artiste", "Titre", "Année", "Format", "Prix"]
+        for label in fields:
+            layout.addWidget(QLabel(f"{label} :"))
+            line = QLineEdit()
+            entries[label] = line
+            layout.addWidget(line)
+
+        layout.addWidget(QLabel("Tracklist :"))
+        txt_tracklist = QTextEdit()
+        layout.addWidget(txt_tracklist)
+
+        # Bouton Image Locale
+        def choose_image():
+            filepath, _ = QFileDialog.getOpenFileName(dlg, "Sélectionner une pochette", "",
+                                                      "Images (*.png *.jpg *.jpeg)")
+            if filepath:
+                try:
+                    with Image.open(filepath) as img:
+                        if img.mode in ("RGBA", "P"): img = img.convert("RGB")
+                        img.thumbnail((600, 600), Image.Resampling.LANCZOS)
+                        img_byte_arr = io.BytesIO()
+                        img.save(img_byte_arr, format='JPEG', quality=85)
+                        encoded_string = base64.b64encode(img_byte_arr.getvalue()).decode("utf-8")
+                        dlg.new_cover_data = f"base64:{encoded_string}"
+                    update_preview(dlg.new_cover_data)
+                except Exception as e:
+                    QMessageBox.critical(dlg, "Erreur", f"Impossible de lire l'image : {e}")
+
+        btn_img = QPushButton("🖼️ Ajouter une pochette (Fichier Local)")
+        btn_img.clicked.connect(choose_image)
+        layout.addWidget(btn_img)
+
+        # Sauvegarde
+        def save_new_vinyl():
+            artiste = entries["Artiste"].text().strip() or "Inconnu"
+            titre = entries["Titre"].text().strip() or "Sans titre"
+
+            # On génère un faux ID unique basé sur le temps présent (pour ne pas casser la BDD)
+            # Le bitwise & 0x7FFFFFFF garantit un entier positif pour SQLite
+            custom_id = int(time.time() * 1000) & 0x7FFFFFFF
+            faux_code_barres = f"CUSTOM_{custom_id}"
+
+            saved = self.save_to_database(
+                barcode=faux_code_barres,
+                discogs_id=custom_id,
+                artists=artiste,
+                title=titre,
+                year=entries["Année"].text().strip(),
+                country="N/A",
+                genres="Personnalisé",
+                styles="Personnalisé",
+                labels="Indépendant / Hors Discogs",
+                formats=entries["Format"].text().strip(),
+                tracks_str=txt_tracklist.toPlainText().strip(),
+                prix_actuel=entries["Prix"].text().strip(),
+                cover_url=dlg.new_cover_data
+            )
+
+            if saved:
+                QMessageBox.information(dlg, "Succès", "Vinyle personnalisé ajouté à la bibliothèque !")
+                dlg.accept()
+                # On bascule automatiquement sur l'onglet Bibliothèque pour voir le résultat
+                self.tabs.setCurrentIndex(1)
+
+        btn_save = QPushButton("💾 Créer et Sauvegarder")
+        btn_save.setStyleSheet("background-color: #0fb9b1;")
+        btn_save.clicked.connect(save_new_vinyl)
+        layout.addWidget(btn_save)
+
+        dlg.exec()
+
     def export_to_csv(self):
         filepath, _ = QFileDialog.getSaveFileName(self, "Sauvegarder Excel", "Ma_Bibliotheque.csv", "CSV (*.csv)")
         if not filepath: return
@@ -748,6 +871,74 @@ class VinylScannerApp(QMainWindow):
             QMessageBox.information(self, "Succès", "Vinyle ajouté à votre bibliothèque !")
             self.reset_scanner()
 
+    def manual_search(self):
+        query = self.input_manual.text().strip()
+        if not query:
+            return
+
+        # On bloque la webcam pour éviter un scan accidentel pendant qu'on cherche
+        self.last_barcode = "MANUAL_SEARCH"
+
+        self.lbl_status.setText(f"Recherche : {query}\nInterrogation API...")
+        self.set_indicator("orange", "RECHERCHE...")
+        QApplication.processEvents()
+
+        if self.token_discogs == "Token" or self.token_discogs == "":
+            QMessageBox.warning(self, "Token", "Veuillez ajouter votre Token d'API Discogs.")
+            self.set_indicator("red", "ERREUR TOKEN")
+            QTimer.singleShot(3000, self.reset_scanner)
+            return
+
+        headers = {"User-Agent": "VinylScannerAppQt/1.0"}
+        # On utilise le paramètre 'q' (query) de Discogs pour chercher par texte
+        api_url = "https://api.discogs.com/database/search"
+        parametres = {"q": query, "type": "release", "token": self.token_discogs}
+
+        try:
+            resp = requests.get(api_url, params=parametres, headers=headers, verify=False)
+            if resp.status_code == 200:
+                results = resp.json().get("results", [])
+                if results:
+                    release_id = results[0]["id"]
+                    cover_url = results[0].get("cover_image")
+
+                    self.lbl_status.setText(f"Disque trouvé (ID: {release_id}).\nRécupération...")
+                    QApplication.processEvents()
+
+                    r_resp = requests.get(f"https://api.discogs.com/releases/{release_id}?token={self.token_discogs}",
+                                          headers=headers, verify=False)
+                    s_resp = requests.get(
+                        f"https://api.discogs.com/marketplace/stats/{release_id}?token={self.token_discogs}",
+                        headers=headers, verify=False)
+
+                    if r_resp.status_code == 200:
+                        full_data = r_resp.json()
+                        stats_data = s_resp.json() if s_resp.status_code == 200 else {}
+
+                        if full_data.get("images"):
+                            primary = [i for i in full_data["images"] if i.get("type") == "primary"]
+                            cover_url = primary[0].get("resource_url") if primary else full_data["images"][0].get(
+                                "resource_url")
+
+                        self.set_indicator("green", "EN ATTENTE")
+
+                        # On simule un code-barres unique avec l'ID discogs pour la base de données
+                        faux_code_barres = f"MANUAL_ID_{release_id}"
+                        self.process_found_vinyl(faux_code_barres, release_id, full_data, stats_data, cover_url)
+                        return
+                    else:
+                        self.set_indicator("red", "ERREUR API")
+                else:
+                    self.lbl_status.setText("Aucun résultat trouvé sur Discogs.")
+                    self.set_indicator("red", "INTROUVABLE")
+            else:
+                self.set_indicator("red", f"ERREUR {resp.status_code}")
+        except Exception as e:
+            self.set_indicator("red", "ERREUR RÉSEAU")
+            print(e)
+
+        QTimer.singleShot(4000, self.reset_scanner)
+
     def reset_scanner(self):
         self.current_vinyl_data = None
         self.btn_save.setEnabled(False)
@@ -759,6 +950,7 @@ class VinylScannerApp(QMainWindow):
         self.lbl_status.setText("En attente d'un scan...")
         self.lbl_status.setStyleSheet("color: #0fb9b1;")
         self.text_info.clear()
+        self.input_manual.clear()
 
     def closeEvent(self, event):
         if hasattr(self, 'cap') and self.cap.isOpened():
